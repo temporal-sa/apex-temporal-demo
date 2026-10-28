@@ -6,6 +6,7 @@ from temporalio.exceptions import ApplicationError
 with workflow.unsafe.imports_passed_through():
     from activities.health import http_health_check
     from activities.terraform import read_terraform_outputs
+    from shared.targets import target_for_queue, workflow_id
 
 from workflows.provision_module import ProvisionModule
 
@@ -59,7 +60,7 @@ class SwapInstance:
         new_compute = await workflow.execute_child_workflow(
             ProvisionModule.run,
             args=["compute", env_name, compute_inputs],
-            id=f"swap-compute-{env_name}-{new_app_version}",
+            id=workflow_id(target_for_queue(workflow.info().task_queue), "swap-compute", env_name, new_app_version),
         )
 
         new_ip = new_compute.get("public_ip")
@@ -68,13 +69,14 @@ class SwapInstance:
 
         url = f"http://{new_ip}/"
         # Raises on a non-2xx response, so returning at all means healthy.
-        await workflow.execute_activity(
+        health = await workflow.execute_activity(
             http_health_check,
             args=[url],
             start_to_close_timeout=timedelta(seconds=15),
             schedule_to_close_timeout=timedelta(minutes=5),
             retry_policy=HEALTH_RETRY,
         )
+        url = health.url  # see DeployTestInstance: may resolve to a local port
 
         return {
             "env": env_name,

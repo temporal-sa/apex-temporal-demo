@@ -1,7 +1,10 @@
 """Preflight: verify local tools, AWS access, the state bucket, and Temporal.
 
-Run this before a demo: `python check.py`. Exits non-zero if anything is missing.
+Run this before a demo: `python check.py`, `python check.py --target local`
+(Terraform, Docker and Floci), or `python check.py --target sim` (only
+Temporal). Exits non-zero if anything is missing.
 """
+import argparse
 import asyncio
 import re
 import shutil
@@ -15,6 +18,7 @@ from shared.config import (
     TF_STATE_BUCKET,
     TF_STATE_REGION,
 )
+from shared.targets import add_target_arg, task_queue
 
 REPO_ROOT = Path(__file__).resolve().parent
 failures = 0
@@ -66,6 +70,25 @@ def check_aws() -> None:
         report(False, "state bucket", f"s3://{TF_STATE_BUCKET}: {e}")
 
 
+def check_local() -> None:
+    """Docker, Floci, and the local state bucket (created if missing)."""
+    from shared.config import FLOCI_ENDPOINT, LOCAL_STATE_BUCKET
+
+    if not shutil.which("docker"):
+        report(False, "docker on PATH", "install Docker; Floci runs EC2 instances as containers")
+        return
+    info = subprocess.run(["docker", "info", "--format", "{{.ServerVersion}}"], capture_output=True, text=True)
+    report(info.returncode == 0, "Docker running", info.stdout.strip() or info.stderr.strip()[:120])
+    try:
+        from activities.floci import ensure_state_bucket
+
+        ensure_state_bucket()
+        report(True, "Floci", f"{FLOCI_ENDPOINT}, state bucket {LOCAL_STATE_BUCKET}")
+    except Exception as e:
+        report(False, "Floci", f"{FLOCI_ENDPOINT}: {type(e).__name__}; start it with "
+               "`docker compose --profile local up -d floci`")
+
+
 async def check_temporal() -> None:
     from temporalio.client import Client
 
@@ -79,8 +102,16 @@ async def check_temporal() -> None:
 
 
 if __name__ == "__main__":
-    check_terraform()
-    check_modules()
-    check_aws()
+    parser = argparse.ArgumentParser(description="Check everything a demo needs.")
+    add_target_arg(parser)
+    target = parser.parse_args().target
+    print(f"target: {target} (task queue {task_queue(target)})")
+    if target in ("aws", "local"):
+        check_terraform()
+        check_modules()
+    if target == "aws":
+        check_aws()
+    if target == "local":
+        check_local()
     asyncio.run(check_temporal())
     sys.exit(1 if failures else 0)

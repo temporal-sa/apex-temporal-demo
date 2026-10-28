@@ -10,3 +10,11 @@ terraform/**/.terraform.lock.hcl
 *.tfplan
 prometheus.yml
 .pytest_cache/
+.sim_state/
+terraform/_workspaces_local/
+
+# Local Temporal dev server database (temporal server start-dev --db-filename)
+*.sqlite
+*.sqlite-*
+.DS_Store
+scripts/steps.md

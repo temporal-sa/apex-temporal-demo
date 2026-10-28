@@ -68,6 +68,9 @@ async def mock_apply(
         raise ApplicationError(
             "plan changed", replanned, f"/tmp/{module}-replanned.bin", type="PlanChangedError", non_retryable=True
         )
+    if tf_vars.get("simulate_failure") == "true":
+        log.setdefault(env, []).append(f"apply-failed:{module}")
+        raise ApplicationError("Simulated app deploy failure", type="AppDeployError", non_retryable=True)
     built.setdefault(env, set()).add(module)
     log.setdefault(env, []).append(f"apply:{module}")
     if f"{env}/{module}" in slow_applies:
@@ -234,10 +237,11 @@ async def test_failure_rolls_back_and_fails(client, tq):
     handle = await start_deploy(client, tq, env, fail=True)
     with pytest.raises(WorkflowFailureError) as err:
         await asyncio.wait_for(handle.result(), 30)
-    assert isinstance(err.value.cause, ApplicationError)
-    assert err.value.cause.type == "RuntimeError"
+    assert "AppDeployError" in error_types(err.value)
     assert (await handle.describe()).status == WorkflowExecutionStatus.FAILED
-    assert log[env] == ["apply:network", "destroy:network"]
+    # Network and compute were built, app failed, and the rollback undid the rest.
+    assert log[env] == ["apply:network", "apply:compute", "apply-failed:app", "destroy:compute", "destroy:network"]
+    assert (await approve.show(client, env, "app"))["status"] == "applying"
     assert (await handle.query(DeployTestInstance.status))["phase"] == "rolled-back"
     await assert_replays(client, env)
 

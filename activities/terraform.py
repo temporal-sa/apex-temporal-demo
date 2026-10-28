@@ -11,12 +11,27 @@ from pathlib import Path
 from temporalio import activity
 from temporalio.exceptions import ApplicationError
 
-from shared.config import TF_STATE_BUCKET, TF_STATE_REGION
+from shared.config import FLOCI_ENDPOINT, LOCAL_STATE_BUCKET, TF_STATE_BUCKET, TF_STATE_REGION
 from shared.idempotency import idempotency_key
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 MODULES_DIR = REPO_ROOT / "terraform" / "modules"
 WORKDIR_BASE = REPO_ROOT / "terraform" / "_workspaces"
+# The local target keeps its own workspaces and copies these overrides in.
+LOCAL_WORKDIR_BASE = REPO_ROOT / "terraform" / "_workspaces_local"
+LOCAL_OVERRIDES_DIR = REPO_ROOT / "terraform" / "local"
+OVERRIDE_ENDPOINT = "http://localhost:4566"
+
+# "aws" or "local": which backend these activities run Terraform against. A
+# worker serves one target, and worker.py sets this once at startup.
+_target = "aws"
+
+
+def use_target(target: str) -> None:
+    global _target
+    if target not in ("aws", "local"):
+        raise ValueError(f"terraform activities don't run against {target!r}")
+    _target = target
 
 # How long plan, apply, and destroy wait for another run's S3 state lock
 # (backend `use_lockfile = true`) before failing. Lock failures are retryable,
@@ -41,11 +56,9 @@ PERMANENT_ERRORS = {
     ),
     "StateBucketError": ("NoSuchBucket",),
     "AwsQuotaError": ("VpcLimitExceeded", "InstanceLimitExceeded", "VcpuLimitExceeded"),
+    # The app module's provisioner failed (e.g. the simulate_failure demo hook).
+    "AppDeployError": ("local-exec provisioner error",),
 }
-
-if not TF_STATE_BUCKET:
-    raise RuntimeError("TF_STATE_BUCKET is not set; copy .env.example to .env and fill it in")
-
 
 @dataclass
 class PlanResult:
@@ -68,14 +81,29 @@ class ApplyResult:
 
 def _workdir(module: str, env: str) -> Path:
     """Per-(module, env) workspace dir. Sync module source on every call so .tf
-    edits propagate to existing envs without manual cleanup."""
+    edits propagate to existing envs without manual cleanup. For the local
+    target, also copy in the Floci overrides (see terraform/local/README.md)."""
     src = MODULES_DIR / module
-    dst = WORKDIR_BASE / env / module
+    dst = (LOCAL_WORKDIR_BASE if _target == "local" else WORKDIR_BASE) / env / module
     dst.mkdir(parents=True, exist_ok=True)
     for item in src.iterdir():
         if item.is_file():
             shutil.copy2(item, dst / item.name)
+    if _target == "local":
+        for override in _local_overrides(module):
+            text = override.read_text().replace(OVERRIDE_ENDPOINT, FLOCI_ENDPOINT)
+            (dst / override.name).write_text(text)
     return dst
+
+
+def _local_overrides(module: str) -> list[Path]:
+    files = [LOCAL_OVERRIDES_DIR / "backend_override.tf"]
+    if 'provider "aws"' in (MODULES_DIR / module / "main.tf").read_text():
+        files.append(LOCAL_OVERRIDES_DIR / "aws_provider_override.tf")
+    specific = LOCAL_OVERRIDES_DIR / f"{module}_override.tf"
+    if specific.exists():
+        files.append(specific)
+    return files
 
 
 async def _run(
@@ -121,6 +149,13 @@ async def _run(
 def _tf_error(step: str, stderr: str) -> ApplicationError:
     """Turn a failed terraform command into a typed, correctly retryable error."""
     message = f"terraform {step} failed: {stderr.strip()}"
+    if _target == "local" and FLOCI_ENDPOINT.split("//")[-1] in stderr and "request send failed" in stderr:
+        # Still retryable: Floci may just be restarting.
+        message = (
+            f"Floci isn't responding at {FLOCI_ENDPOINT}; check `docker logs apex-floci` "
+            f"(restart it with `docker restart apex-floci` if it's stuck starting). {message}"
+        )
+        return ApplicationError(message, type="FlociUnavailable")
     for error_type, fragments in PERMANENT_ERRORS.items():
         if any(f in stderr for f in fragments):
             return ApplicationError(message, type=error_type, non_retryable=True)
@@ -129,10 +164,11 @@ def _tf_error(step: str, stderr: str) -> ApplicationError:
 
 def _backend_args(module: str, env: str) -> list[str]:
     key = f"apex-temporal-demo/{env}/{module}.tfstate"
+    bucket, region = (LOCAL_STATE_BUCKET, "us-east-1") if _target == "local" else (TF_STATE_BUCKET, TF_STATE_REGION)
     return [
-        f"-backend-config=bucket={TF_STATE_BUCKET}",
+        f"-backend-config=bucket={bucket}",
         f"-backend-config=key={key}",
-        f"-backend-config=region={TF_STATE_REGION}",
+        f"-backend-config=region={region}",
     ]
 
 

@@ -49,7 +49,77 @@ The activities shell out to the `terraform` CLI in a per-environment workspace a
 | `SwapInstance` | `swapper.py` | `swap-<env>-<version>` |
 | `TeardownInstance` | `teardown.py`, rollback, TTL | `teardown-<env>`, `rollback-<env>-<ts>`, `teardown-ttl-<env>` |
 
+## Deploy targets
+
+The same workflows run against any of three targets. Each target has its own worker and task queue, so work started for one can never run on the other.
+
+| Target | What runs | Needs | Task queue | Workflow IDs |
+|---|---|---|---|---|
+| `aws` (default) | Real Terraform against real AWS | Terraform, AWS credentials, state bucket | `nonprod-provisioning` | as in the table above |
+| `local` | Real Terraform against [Floci](https://floci.io), a local AWS emulator | Terraform, Docker | `nonprod-provisioning-local` | `@local` suffix (`deploy-<env>@local`) |
+| `sim` | Simulated activities: no Terraform, no AWS | Only Temporal | `nonprod-provisioning-sim` | same, with an `@sim` suffix (`deploy-<env>@sim`) |
+
+The `sim` activities register under the same names and return the same types as the real ones, so everything Temporal does is real: retries, saga rollback, approvals, TTL timers, and crash recovery from `kill -9`. Plans list the same resources as the Terraform modules, simulated state lives in `.sim_state/<env>/` (it survives a worker crash), and instance IPs come from the documentation range `198.51.100.0/24`. Each step (network, compute, app, health check) takes about 10 seconds, so a full deploy takes under a minute; `SIM_SPEED=0.3` makes it snappier.
+
+```bash
+python worker.py --target sim          # terminal 1
+python starter.py demo-01 --target sim # terminal 2
+```
+
+Every CLI takes `--target`, defaulting to `$APEX_TARGET` (or `aws`); `./apex.sh` asks for one. You can run all three workers side by side.
+
+Tune the simulation with environment variables on the **sim worker**:
+
+| Variable | Default | Effect |
+|---|---|---|
+| `SIM_SPEED` | `1` | Multiplies every simulated delay; `0` is instant, `0.3` is snappy |
+| `SIM_FAIL` | | Failures to inject, comma-separated. `compute:apply` fails every attempt (non-retryable, triggers rollback); `network:apply:flaky` fails the first two attempts, then succeeds; `health:check:flaky` is an instance slow to boot. Modules: `network`, `compute`, `app`, or `health:check`; steps: `plan`, `apply`, `destroy`. |
+
+For example, `SIM_FAIL=compute:apply python worker.py --target sim` shows a rollback of a partly built compute module without touching AWS.
+
+### Local target (Floci)
+
+The `local` target runs the **real Terraform modules** against Floci, an open-source AWS emulator running in Docker. Floci runs each EC2 instance as a container, so user data really installs nginx and the health check really fetches the page, all on your laptop with no AWS account and no VPC quota.
+
+```bash
+docker compose --profile local up -d floci   # Floci 2.2.0 on :4566 (state persists in a volume)
+python check.py --target local               # Terraform, Docker, Floci, state bucket
+python worker.py --target local              # terminal 1
+python starter.py demo-01 --target local     # terminal 2; ends with url http://localhost:30000/
+```
+
+How it fits together:
+
+- **Same modules, plus overrides.** For this target the worker copies the files in [`terraform/local/`](terraform/local/README.md) into each workspace (`terraform/_workspaces_local/`). Terraform merges `*_override.tf` files natively, so `terraform/modules/` is exactly what runs on AWS. The overrides point the provider and S3 backend at Floci and work around four Floci differences, each commented in [`compute_override.tf`](terraform/local/compute_override.tf).
+- **State** lives in the `apex-local-state` bucket inside Floci, which the worker creates on startup. It never touches your AWS state bucket.
+- **Reaching the instance.** Floci forwards the instance's port 80 to a host port from 30000 up, but reports `127.0.0.1` as its IP. The local compute module names the instance `<instance-id>.floci.localhost`, and the local worker's health check asks Docker which port Floci forwarded (`activities/floci.py`). The deploy then reports the URL that answered, so the link in the console works.
+- **Timing.** A deploy takes about 2 minutes, mostly `dnf install nginx` inside the instance (slower on Apple Silicon, where the x86 image runs emulated). Swap takes about 1 minute; teardown about 25 seconds.
+- **Version.** Pinned to Floci 2.2.0. Floci 1.5.x has broken API filters that make the AWS provider hang (`aws_route_table_association`) or fail (`aws_instance`).
+
+Floci needs the Docker socket (it starts the instance containers), so it runs as root in its container. Stop it with `docker compose --profile local stop floci`; `docker compose --profile local down -v` also deletes its state.
+
+## Demo console (web UI)
+
+`python ui.py` serves a control panel at http://localhost:8000 over the same workflows the CLIs drive:
+
+- **Target switch** (AWS / Local (Floci) / Simulated), with a live indicator of whether that target's worker is polling
+- **Deploy form**: approval, fail app deploy, TTL
+- **Live pipeline**: network → compute → app → health. Each step shows plan, approval, apply and retry state (attempt number and last error, read from pending activities), with a link to its workflow in the Temporal UI
+- **Plan review**: Approve / Reject buttons that send the `decide` Update, with the reason recorded in history
+- **TTL controls**: a countdown, plus **+5 minutes** and **Tear down now** (the `extend_ttl` and `teardown_now` signals)
+- **Swap and teardown** actions, and every workflow for the deploy (children, rollback, teardowns) in one list
+- **Simulated failures** (sim target only): checkboxes the sim worker reads on every attempt, so you can make the next step flaky or fail without restarting it
+
+```bash
+python worker.py --target sim   # terminal 1
+python ui.py                    # terminal 2, then open http://localhost:8000
+```
+
+The UI holds no state; everything comes from Temporal, so it survives a refresh or a restart. It links to the Temporal UI at `$TEMPORAL_UI_URL` (default http://localhost:8233). The **Approve** button is the answer to "how does our own UI talk to a waiting workflow?": it's one `execute_update` call on the workflow ID (see `decide` in `ui.py`).
+
 ## Prerequisites
+
+For the `sim` target you only need Python and a Temporal server; for `local`, add Terraform and Docker. Both skip the AWS and bucket steps below.
 
 - **Python 3.12+**
 - **Terraform 1.10+** (for S3 native state locking)
@@ -158,10 +228,10 @@ Swap reads the network outputs from state, then re-applies compute with `app_ver
 ### 3. Saga rollback
 
 ```bash
-python starter.py fail-network-01 --fail-after-network
+python starter.py fail-app-01 --fail-app-deploy
 ```
 
-The network module builds, then the workflow fails on purpose. A `rollback-fail-network-01-<ts>` child destroys the network, and the deploy ends as **Failed** instead of retrying forever. Afterwards, the AWS console shows no `apex-fail-network-01-*` resources.
+Network and compute build, then the app module's apply fails on purpose (its `local-exec` provisioner exits non-zero, a permanent `AppDeployError`). A `rollback-fail-app-01-<ts>` child destroys app, compute, and network in reverse order, and the deploy ends as **Failed** instead of retrying forever. Afterwards, the AWS console shows no `apex-fail-app-01-*` resources.
 
 ### 4. Crash recovery
 
@@ -243,14 +313,17 @@ python teardown.py ephemeral-test-01   # second run: every module "skipped (stat
 
 | Command | Purpose |
 |---|---|
-| `./apex.sh` | Interactive menu for provision, swap, and teardown. Prints the command before running it. |
-| `python starter.py [ENV] [--ttl SECONDS] [--fail-after-network] [--require-approval [--approval-timeout SECONDS]]` | Provision an environment (default `ephemeral-test-01`). With `--require-approval`, each module plan with changes waits for `approve.py` (default timeout 24h). |
+| `./apex.sh` | Interactive menu for provision, swap, and teardown. Asks for a target unless `APEX_TARGET` is set. Prints the command before running it. |
+| `python starter.py [ENV] [--ttl SECONDS] [--fail-app-deploy] [--require-approval [--approval-timeout SECONDS]]` | Provision an environment (default `ephemeral-test-01`). With `--require-approval`, each module plan with changes waits for `approve.py` (default timeout 24h). |
 | `python approve.py ENV MODULE [--approve \| --reject] [--reason TEXT]` | Show a module's plan waiting for approval, and approve or reject it. |
 | `python swapper.py ENV VERSION` | Replace the instance with a new app version. |
 | `python teardown.py ENV` | Destroy an environment. Safe to re-run. |
 | `temporal workflow signal --workflow-id deploy-ENV --name extend_ttl --input SECONDS` | Push back a TTL teardown. `--name teardown_now` (no input) tears down immediately. |
-| `python check.py` | Preflight check of tools, AWS access, state bucket, and Temporal. |
-| `python worker.py` | Run the worker. Metrics at http://localhost:9090/metrics. |
+| `python check.py` | Preflight check of tools, AWS access, state bucket, and Temporal. With `--target local`: Terraform, Docker, Floci; with `--target sim`: only Temporal. |
+| `python ui.py [--port 8000]` | Run the demo console. |
+| `python worker.py [--target aws\|local\|sim]` | Run the worker for one target. Metrics at http://localhost:9090/metrics (`aws`), :9093 (`local`) or :9092 (`sim`). |
+
+Every `python` command above also takes `--target aws|local|sim` (default `$APEX_TARGET`, else `aws`). For `local` and `sim` workflows, add `@local` or `@sim` to workflow IDs in `temporal` commands, e.g. `--workflow-id deploy-ENV@sim`.
 | `scripts/reset.sh ENV` | Break-glass cleanup that runs Terraform directly, without Temporal. |
 
 ## Tests
@@ -260,9 +333,12 @@ pip install -r requirements-dev.txt
 pytest
 ```
 
-The suite takes about 30 seconds and needs no AWS account, Terraform, or running Temporal server:
+The suite takes about a minute and needs no AWS account, Terraform, or running Temporal server:
 
 - **Workflow tests** run the real workflows on a throwaway Temporal dev server, with the Terraform and HTTP activities swapped for in-memory mocks. They cover the TTL query and signals, cancelling during the TTL wait and mid-apply, failure rollback, swap, and approval (approve, reject, timeout, and re-approval when the plan changes before apply). Each test then replays its workflow histories against the current code to catch non-determinism. The dev server comes from the `temporal` CLI if it's on your PATH; otherwise the SDK downloads it on the first run.
+- **Sim tests** run the real workflows against the simulated activities on the `sim` task queue: deploy and idempotent teardown, an injected failure rolling back, a flaky step retrying, rejecting a plan, and swap.
+- **UI tests** drive the console's API against the real workflows and sim activities: deploy, approve and reject through the API, the validator refusing a second decision, and fault toggles reaching the worker.
+- **Local target tests** check which Floci overrides land in each workspace, the separate state bucket, and the health check resolving an instance name to Floci's forwarded port (against a fake `docker`). The end-to-end path needs Floci running, so it's a manual check: deploy, swap, fail app deploy, and teardown with `--target local`.
 - **Activity tests** run the Terraform activities against a fake `terraform` script (`tests/bin/terraform`, bash, so macOS or Linux) and the health check against a local HTTP server. They cover error classification, re-planning on retry, plan summaries and comparing a re-plan with the approved plan, interrupting `terraform` on cancel, and health status codes.
 
 Run `pytest` before changing a workflow. If a replay check fails, the change would break workflows already running; see [versioning](https://docs.temporal.io/develop/python/versioning).
@@ -278,6 +354,8 @@ Run `pytest` before changing a workflow. If a replay check fails, the change wou
 ├── approve.py                 Show, approve, or reject a module plan
 ├── check.py                   Preflight checks
 ├── apex.sh                    Interactive demo menu
+├── ui.py                      Demo console: FastAPI over the Temporal client
+├── ui/index.html              Demo console page (no build step)
 ├── workflows/
 │   ├── deploy_test_instance.py   Parent: network, compute, app, health, rollback, TTL
 │   ├── provision_module.py       Child: plan, optional approval, then apply if needed
@@ -285,26 +363,33 @@ Run `pytest` before changing a workflow. If a replay check fails, the change wou
 │   └── teardown_instance.py      Destroy in reverse order, skipping empty state
 ├── activities/
 │   ├── terraform.py           terraform init/plan/apply/destroy/output via subprocess
-│   └── health.py              HTTP health check
+│   ├── health.py              HTTP health check
+│   ├── floci.py               Local target: finds Floci's port forward, creates the state bucket
+│   └── sim.py                 Simulated versions of both, for the sim target
 ├── shared/
 │   ├── config.py              Settings loaded from .env
+│   ├── targets.py             Deploy targets: task queue and workflow ID per target
 │   └── idempotency.py         Deterministic per-activity idempotency key
 ├── terraform/modules/
 │   ├── network/               VPC, public subnet, IGW, route table, HTTP security group
 │   ├── compute/               t3.micro (Amazon Linux 2023) with nginx via user data
-│   └── app/                   null_resource marker for future app deploy logic
+│   └── app/                   null_resource marker; simulate_failure fails its apply on purpose
+├── terraform/local/           Override files that point the modules at Floci (local target)
 ├── scripts/
 │   ├── render_prometheus.py   Render prometheus.yml from the template and .env
 │   └── reset.sh               Break-glass Terraform cleanup
 ├── tests/
 │   ├── conftest.py            Throwaway Temporal dev server shared by the workflow tests
 │   ├── test_workflows.py      Real workflows with mocked activities, plus replay checks
+│   ├── test_sim.py            Real workflows against the simulated activities
+│   ├── test_ui.py             The console's API against the sim target
+│   ├── test_floci.py          Local target: overrides, state bucket, port resolution
 │   ├── test_terraform_activities.py   Terraform activities against a fake terraform
 │   ├── test_health_activity.py        Health check against a local HTTP server
 │   └── bin/terraform          Fake terraform CLI used by the activity tests
 ├── pytest.ini                 Test settings
 ├── requirements-dev.txt       Runtime requirements plus pytest
-└── docker-compose.yml         Temporal, Postgres, Temporal UI, optional Prometheus
+└── docker-compose.yml         Temporal, Postgres, Temporal UI, optional Prometheus and Floci
 ```
 
 ## Configuration
@@ -313,11 +398,16 @@ Settings come from `.env` (see `.env.example`):
 
 | Variable | Default | Purpose |
 |---|---|---|
-| `TF_STATE_BUCKET` | *(required)* | S3 bucket for Terraform state |
+| `APEX_TARGET` | `aws` | Default target for the worker and CLIs: `aws`, `local`, or `sim` |
+| `TF_STATE_BUCKET` | *(required for `aws`)* | S3 bucket for Terraform state |
 | `TF_STATE_REGION` | `us-east-1` | Region of the state bucket |
 | `TEMPORAL_ADDRESS` | `localhost:7233` | Temporal frontend |
 | `TEMPORAL_NAMESPACE` | `default` | Temporal namespace |
-| `TEMPORAL_TASK_QUEUE_NONPROD` | `nonprod-provisioning` | Task queue the worker polls |
+| `TEMPORAL_TASK_QUEUE_NONPROD` | `nonprod-provisioning` | Task queue for `aws`; other targets append `-<target>` |
+| `SIM_SPEED`, `SIM_FAIL` | | Simulation knobs, read by the `sim` worker (see [Deploy targets](#deploy-targets)) |
+| `FLOCI_ENDPOINT` | `http://localhost:4566` | Floci's endpoint, for the `local` target |
+| `LOCAL_STATE_BUCKET` | `apex-local-state` | Terraform state bucket inside Floci (created by the local worker) |
+| `TEMPORAL_UI_URL` | `http://localhost:8233` | Where the demo console links to workflows |
 | `GRAFANA_PROM_*` | | Grafana Cloud remote write, only for the metrics profile |
 
 AWS resources are always created in **us-east-1**; the region is set in the Terraform modules.

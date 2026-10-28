@@ -1,0 +1,602 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Apex Demo Console</title>
+<style>
+:root {
+  --bg: #f6f7f9; --panel: #ffffff; --panel-2: #f1f3f6; --border: #dde1e7;
+  --text: #16191f; --muted: #5d6573; --faint: #8a93a1;
+  --accent: #4f46e5; --accent-text: #ffffff; --accent-soft: #eef0ff;
+  --ok: #15803d; --ok-soft: #e7f6ec; --warn: #b45309; --warn-soft: #fdf3e2;
+  --bad: #b91c1c; --bad-soft: #fdecec; --info: #0e7490; --info-soft: #e5f5f8;
+  --mono: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+  --radius: 10px; --shadow: 0 1px 2px rgba(16, 24, 40, .06);
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a303b;
+    --text: #e8eaee; --muted: #a2a9b6; --faint: #6e7684;
+    --accent: #818cf8; --accent-text: #0f1115; --accent-soft: #23264a;
+    --ok: #4ade80; --ok-soft: #14291c; --warn: #fbbf24; --warn-soft: #2e2512;
+    --bad: #f87171; --bad-soft: #321819; --info: #67e8f9; --info-soft: #11292e;
+    --shadow: none;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #0f1115; --panel: #171a21; --panel-2: #1e222b; --border: #2a303b;
+  --text: #e8eaee; --muted: #a2a9b6; --faint: #6e7684;
+  --accent: #818cf8; --accent-text: #0f1115; --accent-soft: #23264a;
+  --ok: #4ade80; --ok-soft: #14291c; --warn: #fbbf24; --warn-soft: #2e2512;
+  --bad: #f87171; --bad-soft: #321819; --info: #67e8f9; --info-soft: #11292e;
+  --shadow: none;
+}
+* { box-sizing: border-box; }
+body {
+  margin: 0; background: var(--bg); color: var(--text);
+  font: 14px/1.45 system-ui, -apple-system, "Segoe UI", Roboto, sans-serif;
+}
+a { color: var(--accent); text-decoration: none; }
+a:hover { text-decoration: underline; }
+button, input, select { font: inherit; color: inherit; }
+code, .mono { font-family: var(--mono); font-size: 12.5px; }
+
+header {
+  display: flex; align-items: center; gap: 16px; flex-wrap: wrap;
+  padding: 12px 20px; background: var(--panel); border-bottom: 1px solid var(--border);
+  position: sticky; top: 0; z-index: 5;
+}
+.brand { font-weight: 650; font-size: 15px; letter-spacing: -.01em; }
+.brand span { color: var(--faint); font-weight: 500; }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button {
+  border: 0; background: transparent; padding: 5px 14px; cursor: pointer; color: var(--muted);
+}
+.seg button + button { border-left: 1px solid var(--border); }
+.seg button[aria-pressed="true"] { background: var(--accent); color: var(--accent-text); font-weight: 600; }
+.spacer { flex: 1; }
+.pill {
+  display: inline-flex; align-items: center; gap: 6px; padding: 3px 10px;
+  border-radius: 999px; font-size: 12.5px; background: var(--panel-2); color: var(--muted);
+  white-space: nowrap;
+}
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.dot.ok { background: var(--ok); } .dot.bad { background: var(--bad); }
+
+.layout {
+  display: grid; grid-template-columns: 300px minmax(0, 1fr); gap: 20px;
+  max-width: 1280px; margin: 0 auto; padding: 20px;
+}
+@media (max-width: 860px) {
+  .layout { grid-template-columns: minmax(0, 1fr); padding: 16px; }
+  header { position: static; padding: 12px 16px; }
+}
+
+.card {
+  background: var(--panel); border: 1px solid var(--border); border-radius: var(--radius);
+  box-shadow: var(--shadow); padding: 16px; margin-bottom: 16px;
+}
+.card h2 { font-size: 12px; text-transform: uppercase; letter-spacing: .06em; color: var(--faint); margin: 0 0 12px; font-weight: 600; }
+.card h3 { margin: 0; font-size: 15px; }
+
+label.field { display: block; margin-bottom: 10px; color: var(--muted); font-size: 12.5px; }
+label.field input, label.field select {
+  display: block; width: 100%; margin-top: 4px; padding: 7px 9px;
+  background: var(--bg); border: 1px solid var(--border); border-radius: 7px;
+}
+label.check { display: flex; gap: 8px; align-items: flex-start; margin: 6px 0; cursor: pointer; }
+label.check input { margin-top: 3px; }
+.hint { color: var(--faint); font-size: 12px; }
+
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 6px;
+  padding: 7px 14px; border-radius: 7px; border: 1px solid var(--border);
+  background: var(--panel-2); cursor: pointer; font-weight: 550; white-space: nowrap;
+}
+.btn:hover:not(:disabled) { filter: brightness(.97); }
+.btn:disabled { opacity: .5; cursor: not-allowed; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-text); }
+.btn.ok { background: var(--ok); border-color: var(--ok); color: var(--panel); }
+.btn.bad { background: transparent; border-color: var(--bad); color: var(--bad); }
+.btn.block { width: 100%; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+.envs { list-style: none; margin: 0; padding: 0; }
+.envs li button {
+  width: 100%; text-align: left; display: flex; justify-content: space-between; align-items: center; gap: 8px;
+  padding: 8px 10px; border: 0; border-radius: 7px; background: transparent; cursor: pointer;
+}
+.envs li button:hover { background: var(--panel-2); }
+.envs li button[aria-current="true"] { background: var(--accent-soft); }
+.envs .name { font-family: var(--mono); font-size: 13px; overflow: hidden; text-overflow: ellipsis; }
+
+.badge {
+  display: inline-block; padding: 1px 8px; border-radius: 999px; font-size: 11.5px; font-weight: 600;
+  background: var(--panel-2); color: var(--muted); white-space: nowrap;
+}
+.badge.running { background: var(--info-soft); color: var(--info); }
+.badge.completed, .badge.done { background: var(--ok-soft); color: var(--ok); }
+.badge.failed, .badge.terminated, .badge.timed-out, .badge.rejected { background: var(--bad-soft); color: var(--bad); }
+.badge.canceled, .badge.waiting { background: var(--warn-soft); color: var(--warn); }
+
+.env-head { display: flex; align-items: baseline; gap: 10px; flex-wrap: wrap; margin-bottom: 4px; }
+.env-head h3 { font-family: var(--mono); font-size: 18px; }
+.env-sub { color: var(--muted); font-size: 13px; }
+
+.pipeline { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 10px; margin-top: 16px; }
+@media (max-width: 640px) { .pipeline { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
+.step {
+  border: 1px solid var(--border); border-radius: 9px; padding: 12px; background: var(--bg);
+  position: relative; min-height: 96px;
+}
+.step .title { font-weight: 600; display: flex; justify-content: space-between; align-items: center; gap: 6px; }
+.step .what { color: var(--faint); font-size: 12px; margin: 2px 0 10px; }
+.step .state { font-size: 12.5px; display: flex; align-items: center; gap: 6px; }
+.step .state::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--faint); flex: none; }
+.step.s-active { border-color: var(--info); }
+.step.s-active .state::before { background: var(--info); animation: pulse 1.2s ease-in-out infinite; }
+.step.s-wait { border-color: var(--warn); background: var(--warn-soft); }
+.step.s-wait .state::before { background: var(--warn); animation: pulse 1.2s ease-in-out infinite; }
+.step.s-done .state::before { background: var(--ok); }
+.step.s-bad { border-color: var(--bad); }
+.step.s-bad .state::before { background: var(--bad); }
+.step.s-gone { opacity: .7; } .step.s-gone .state::before { background: transparent; border: 1.5px solid var(--faint); }
+.step a.view { font-size: 12px; font-weight: 500; }
+.step .retry { margin-top: 8px; font-size: 12px; color: var(--warn); }
+.step .retry .mono { display: block; color: var(--muted); font-size: 11.5px; margin-top: 2px; overflow-wrap: anywhere; }
+@keyframes pulse { 50% { opacity: .35; } }
+@media (prefers-reduced-motion: reduce) { .step .state::before { animation: none !important; } }
+
+.banner { border-radius: 9px; padding: 10px 12px; margin-top: 14px; font-size: 13px; }
+.banner.bad { background: var(--bad-soft); color: var(--bad); }
+.banner.warn { background: var(--warn-soft); color: var(--warn); }
+.banner.ok { background: var(--ok-soft); color: var(--ok); }
+.banner .mono { word-break: break-word; }
+
+.approval { border: 1px solid var(--warn); }
+.plan {
+  font-family: var(--mono); font-size: 12.5px; background: var(--bg); border: 1px solid var(--border);
+  border-radius: 7px; padding: 8px 10px; margin: 10px 0; max-height: 220px; overflow: auto;
+}
+.plan div { white-space: pre; }
+.plan .add { color: var(--ok); } .plan .rep { color: var(--warn); } .plan .del { color: var(--bad); }
+.counts { display: flex; gap: 14px; font-size: 13px; }
+.counts b { font-variant-numeric: tabular-nums; }
+
+.grid2 { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+@media (max-width: 1000px) { .grid2 { grid-template-columns: minmax(0, 1fr); } }
+.kv { display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 6px 14px; font-size: 13px; }
+.kv dt { color: var(--faint); } .kv dd { margin: 0; word-break: break-all; }
+.countdown { font-variant-numeric: tabular-nums; font-weight: 600; }
+
+table.timeline { width: 100%; border-collapse: collapse; font-size: 13px; }
+.timeline td { padding: 6px 4px; border-top: 1px solid var(--border); vertical-align: top; }
+.timeline tr:first-child td { border-top: 0; }
+.timeline td.when { color: var(--faint); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.timeline .mono { word-break: break-all; }
+
+.empty { color: var(--faint); text-align: center; padding: 40px 10px; }
+.empty b { color: var(--muted); display: block; font-size: 15px; margin-bottom: 4px; }
+
+#toasts { position: fixed; bottom: 16px; right: 16px; left: 16px; display: flex; flex-direction: column; align-items: flex-end; gap: 8px; z-index: 20; pointer-events: none; }
+.toast {
+  pointer-events: auto; max-width: 440px; padding: 10px 14px; border-radius: 8px;
+  background: var(--text); color: var(--bg); font-size: 13px; box-shadow: 0 4px 18px rgba(0,0,0,.18);
+}
+.toast.bad { background: var(--bad); color: #fff; }
+.sr { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); }
+</style>
+</head>
+<body>
+<header>
+  <div class="brand">Apex <span>· Temporal infra demo</span></div>
+  <div class="seg" role="group" aria-label="Deploy target" id="targets"></div>
+  <span class="pill" id="worker" title="Whether a worker is polling this target's task queue"><span class="dot"></span><span>checking worker…</span></span>
+  <div class="spacer"></div>
+  <a class="pill" id="tui" target="_blank" rel="noopener">Temporal UI ↗</a>
+</header>
+
+<div class="layout">
+  <aside>
+    <div class="card">
+      <h2>New deploy</h2>
+      <form id="deploy-form">
+        <label class="field">Environment name
+          <input name="env" required pattern="[a-z0-9][a-z0-9\-]{0,40}" autocomplete="off" spellcheck="false">
+        </label>
+        <label class="check"><input type="checkbox" name="require_approval" checked>
+          <span>Require approval<br><span class="hint">Each module pauses after plan for Approve / Reject</span></span></label>
+        <label class="check"><input type="checkbox" name="fail_app_deploy">
+          <span>Fail app deploy<br><span class="hint">Network and compute build, app fails, both roll back</span></span></label>
+        <label class="field">Auto-teardown (TTL)
+          <select name="ttl">
+            <option value="0">Keep until torn down</option>
+            <option value="120">2 minutes</option>
+            <option value="600">10 minutes</option>
+            <option value="3600">1 hour</option>
+          </select>
+        </label>
+        <p class="hint" style="margin:0 0 10px">Names starting with <code>chaos-</code> pause 30s after network, a window to <code>kill -9</code> the worker.</p>
+        <button class="btn primary block" type="submit">Deploy</button>
+      </form>
+    </div>
+
+    <div class="card" id="faults-card" hidden>
+      <h2>Simulated failures</h2>
+      <div id="faults"></div>
+      <p class="hint" style="margin:8px 0 0">Read by the sim worker on every attempt, so they apply to steps that haven't run yet.</p>
+    </div>
+
+    <div class="card">
+      <h2>Environments</h2>
+      <ul class="envs" id="envs"></ul>
+    </div>
+  </aside>
+
+  <main id="detail"></main>
+</div>
+<div id="toasts" aria-live="polite"></div>
+
+<script>
+const STEPS = [
+  { key: "network", title: "Network", what: "VPC, subnet, IGW, security group" },
+  { key: "compute", title: "Compute", what: "EC2 t3.micro + nginx" },
+  { key: "app", title: "App", what: "App version marker" },
+  { key: "health", title: "Health check", what: "HTTP GET until 2xx" },
+];
+const PHASE_TEXT = {
+  "starting": "Starting", "provisioning-network": "Provisioning network", "provisioning-compute": "Provisioning compute",
+  "provisioning-app": "Provisioning app", "health-check": "Health-checking the instance", "healthy": "Healthy",
+  "ttl-wait": "Healthy, auto-teardown scheduled", "tearing-down": "Tearing down (TTL or Tear down now)", "torn-down": "Torn down after its TTL wait",
+  "rolling-back": "Saga rollback in progress", "rolled-back": "Rolled back", "rollback-failed": "Rollback failed",
+};
+
+const state = { config: null, target: "sim", env: null, detail: null, envs: [] };
+const TARGET_LABEL = { aws: "AWS", local: "Local (Floci)", sim: "Simulated" };
+const TARGET_HINT = {
+  aws: "AWS deploys create a real VPC and t3.micro in us-east-1.",
+  local: "Real Terraform against Floci, a local AWS emulator: instances are Docker containers serving on localhost. Needs <code>docker compose --profile local up -d floci</code> and <code>python worker.py --target local</code>.",
+  sim: "The simulated target needs only Temporal: run <code>python worker.py --target sim</code>.",
+};
+const $ = (s) => document.querySelector(s);
+const esc = (v) => String(v ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
+function store(k, v) { try { localStorage.setItem("apex." + k, v); } catch {} }
+function load(k) { try { return localStorage.getItem("apex." + k); } catch { return null; } }
+
+// Replace a section only when its markup changed, so typing in an input
+// (approval reason, swap version) survives the polling.
+function setHTML(el, html) { if (el._html !== html) { el._html = html; el.innerHTML = html; } }
+
+function toast(msg, bad = false) {
+  const t = document.createElement("div");
+  t.className = "toast" + (bad ? " bad" : "");
+  t.textContent = msg;
+  $("#toasts").appendChild(t);
+  setTimeout(() => t.remove(), bad ? 7000 : 3500);
+}
+
+async function api(path, opts = {}) {
+  const res = await fetch(path, {
+    ...opts,
+    headers: opts.body ? { "Content-Type": "application/json" } : undefined,
+    body: opts.body ? JSON.stringify(opts.body) : undefined,
+  });
+  if (!res.ok) {
+    let msg = res.statusText;
+    try { const j = await res.json(); msg = typeof j.detail === "string" ? j.detail : JSON.stringify(j.detail); } catch {}
+    const err = new Error(msg); err.status = res.status; throw err;
+  }
+  return res.json();
+}
+
+function wfLink(id, label = "View ↗") {
+  const c = state.config;
+  return `<a class="view" target="_blank" rel="noopener" href="${esc(c.temporal_ui)}/namespaces/${encodeURIComponent(c.namespace)}/workflows/${encodeURIComponent(id)}">${label}</a>`;
+}
+
+function since(iso) {
+  if (!iso) return "";
+  const s = Math.max(0, Math.round((Date.now() - new Date(iso)) / 1000));
+  if (s < 60) return s + "s ago";
+  if (s < 3600) return Math.floor(s / 60) + "m ago";
+  return Math.floor(s / 3600) + "h ago";
+}
+function clock(iso) { return iso ? new Date(iso).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit", second: "2-digit" }) : ""; }
+
+// ---- header ----
+function renderTargets() {
+  setHTML($("#targets"), state.config.targets.map((t) =>
+    `<button type="button" data-target="${t}" aria-pressed="${t === state.target}">${TARGET_LABEL[t] || t}</button>`).join(""));
+  $("#faults-card").hidden = state.target !== "sim";
+  $("#tui").href = `${state.config.temporal_ui}/namespaces/${encodeURIComponent(state.config.namespace)}/workflows`;
+}
+$("#targets").addEventListener("click", (e) => {
+  const t = e.target.closest("button")?.dataset.target;
+  if (!t || t === state.target) return;
+  state.target = t; state.env = null; state.detail = null; store("target", t);
+  renderTargets(); renderDetail(); refreshAll();
+});
+
+async function refreshWorker() {
+  const el = $("#worker");
+  try {
+    const w = await api(`/api/${state.target}/worker`);
+    const ago = w.last_seen_seconds == null ? "never seen" : `seen ${w.last_seen_seconds}s ago`;
+    setHTML(el, `<span class="dot ${w.online ? "ok" : "bad"}"></span><span>${w.online ? "Worker online" : "No worker"} · <span class="mono">${esc(w.task_queue)}</span></span>`);
+    el.title = `${w.pollers} poller(s), ${ago}. Start one with: python worker.py --target ${state.target}`;
+  } catch (e) {
+    setHTML(el, `<span class="dot bad"></span><span>Temporal unreachable</span>`);
+    el.title = e.message;
+  }
+}
+
+// ---- env list ----
+async function refreshEnvs() {
+  try { state.envs = await api(`/api/${state.target}/envs`); } catch { return; }
+  renderEnvs();
+}
+function renderEnvs() {
+  const html = state.envs.length
+    ? state.envs.map((e) => `<li><button type="button" data-env="${esc(e.env)}" aria-current="${e.env === state.env}">
+        <span class="name">${esc(e.env)}</span><span class="badge ${esc(e.status)}">${esc(e.status)}</span></button></li>`).join("")
+    : `<li class="hint" style="padding:6px 10px">No deploys on this target yet.</li>`;
+  setHTML($("#envs"), html);
+}
+$("#envs").addEventListener("click", (e) => {
+  const env = e.target.closest("button")?.dataset.env;
+  if (env) selectEnv(env);
+});
+function selectEnv(env) {
+  state.env = env; state.detail = null; store("env." + state.target, env);
+  renderEnvs(); renderDetail(); refreshDetail();
+}
+
+// ---- deploy form ----
+function suggestEnv() {
+  const names = new Set(state.envs.map((e) => e.env));
+  for (let i = 1; i < 100; i++) { const n = `demo-${String(i).padStart(2, "0")}`; if (!names.has(n)) return n; }
+  return "demo-" + Date.now().toString(36);
+}
+$("#deploy-form").addEventListener("submit", async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const body = {
+    env: f.get("env").trim(), require_approval: f.has("require_approval"),
+    fail_app_deploy: f.has("fail_app_deploy"), ttl: Number(f.get("ttl")),
+  };
+  const btn = e.target.querySelector("button[type=submit]");
+  btn.disabled = true;
+  try {
+    await api(`/api/${state.target}/deploy`, { method: "POST", body });
+    toast(`Deploy started: ${body.env}`);
+    await refreshEnvs();
+    selectEnv(body.env);
+    e.target.env.value = suggestEnv();
+  } catch (err) { toast(err.message, true); }
+  finally { btn.disabled = false; }
+});
+
+// ---- sim faults ----
+async function refreshFaults() {
+  if (state.target !== "sim") return;
+  try {
+    const f = await api("/api/sim/faults");
+    setHTML($("#faults"), f.presets.map((p) =>
+      `<label class="check"><input type="checkbox" data-fault="${esc(p.id)}" ${p.on ? "checked" : ""}><span>${esc(p.label)}<br><code class="hint">${esc(p.id)}</code></span></label>`).join(""));
+  } catch {}
+}
+$("#faults").addEventListener("change", async () => {
+  const on = [...document.querySelectorAll("[data-fault]")].filter((i) => i.checked).map((i) => i.dataset.fault);
+  try { await api("/api/sim/faults", { method: "PUT", body: { on } }); $("#faults")._html = null; refreshFaults(); }
+  catch (err) { toast(err.message, true); }
+});
+
+// ---- env detail ----
+async function refreshDetail() {
+  if (!state.env) return;
+  const env = state.env, target = state.target;
+  try {
+    const d = await api(`/api/${target}/envs/${encodeURIComponent(env)}`);
+    if (env === state.env && target === state.target) { state.detail = d; renderDetail(); }
+  } catch (err) {
+    if (err.status === 404 && env === state.env) { state.detail = null; renderDetail(); }
+  }
+}
+
+// Whether what the deploy built has since been destroyed (rollback, TTL, or a
+// later teardown), and whether that is happening right now.
+function teardownState(d) {
+  if (d.phase === "rolling-back" || d.phase === "tearing-down") return "running";
+  if (d.phase === "rolled-back" || d.phase === "torn-down") return "done";
+  const t = d.related.find((r) => r.kind === "teardown");
+  return t ? (t.status === "completed" ? "done" : t.status === "running" ? "running" : null) : null;
+}
+
+function stepView(d, step) {
+  const v = stepBase(d, step);
+  const td = teardownState(d);
+  if (td && (v.cls === "s-done")) {
+    return td === "running" ? { ...v, cls: "s-active", text: "Destroying" } : { ...v, cls: "s-gone", text: d.phase === "rolled-back" ? "Rolled back" : "Torn down" };
+  }
+  return v;
+}
+
+function stepBase(d, step) {
+  if (step.key === "health") {
+    const p = d.phase;
+    if (p === "health-check") return { cls: "s-active", text: "Checking " + (d.url || "") };
+    if (["healthy", "ttl-wait", "tearing-down", "torn-down"].includes(p) || d.status === "completed") return { cls: "s-done", text: "Healthy (2xx)" };
+    if (d.built.length === 3 && ["rolling-back", "rolled-back", "rollback-failed"].includes(p)) return { cls: "s-bad", text: "Failed" };
+    if (d.status !== "running") return { cls: "s-gone", text: "Skipped" };
+    return { cls: "", text: "Waiting" };
+  }
+  const m = d.modules.find((x) => x.module === step.key);
+  const detail = m.detail;
+  const map = {
+    "planning": ["s-active", "Running terraform plan"], "awaiting-approval": ["s-wait", "Waiting for approval"],
+    "approved": ["s-active", "Approved"], "applying": ["s-active", "Running terraform apply"],
+    "applied": ["s-done", "Applied"], "no-changes": ["s-done", "No changes"],
+    "rejected": ["s-bad", "Rejected"], "timed-out": ["s-bad", "Approval timed out"],
+  };
+  if (m.status === "pending") return { cls: "", text: "Waiting", m };
+  if (detail && map[detail]) {
+    let [cls, text] = map[detail];
+    if (m.status === "failed" && cls !== "s-bad") { cls = "s-bad"; text = "Failed"; }
+    return { cls, text, m };
+  }
+  if (m.status === "running") return { cls: "s-active", text: "Running", m };
+  if (m.status === "completed") return { cls: "s-done", text: "Done", m };
+  return { cls: "s-bad", text: m.status, m };
+}
+
+function planLines(summary) {
+  return summary.resources.map((r) => {
+    const cls = r.startsWith("-/+") ? "rep" : r.startsWith("+") ? "add" : r.startsWith("-") ? "del" : "";
+    return `<div class="${cls}">${esc(r)}</div>`;
+  }).join("");
+}
+
+function renderDetail() {
+  const root = $("#detail");
+  if (!state.env) {
+    setHTML(root, `<div class="card empty"><b>Pick an environment or start a deploy</b>
+      ${TARGET_HINT[state.target] || ""}</div>`);
+    return;
+  }
+  const d = state.detail;
+  if (!d) { setHTML(root, `<div class="card empty"><b>${esc(state.env)}</b>Loading…</div>`); return; }
+
+  // Ensure the section containers exist once, then fill each independently.
+  if (!root.querySelector("#sec-head")) {
+    root.innerHTML = `<div class="card"><div id="sec-head"></div><div class="pipeline" id="sec-pipe"></div><div id="sec-banner"></div></div>
+      <div id="sec-approval"></div>
+      <div class="grid2"><div class="card" id="sec-instance"></div><div class="card" id="sec-actions"></div></div>
+      <div class="card"><h2>Workflows for this deploy</h2><div id="sec-timeline"></div></div>`;
+    root._html = null;  // so the empty/loading states replace these sections again
+  }
+  const phase = PHASE_TEXT[d.phase] || d.phase || (d.status === "running" ? "Waiting for a worker" : "");
+  setHTML($("#sec-head"), `<div class="env-head"><h3>${esc(d.env)}</h3><span class="badge ${esc(d.status)}">${esc(d.status)}</span>
+      <span class="spacer"></span>${wfLink(d.workflow_id, "Open in Temporal UI ↗")}</div>
+    <div class="env-sub">${esc(phase)} · started ${esc(clock(d.started))} · <span class="mono">${esc(d.workflow_id)}</span></div>`);
+
+  setHTML($("#sec-pipe"), STEPS.map((s) => {
+    const v = stepView(d, s);
+    const link = v.m && v.m.status !== "pending" ? wfLink(v.m.workflow_id) : "";
+    const r = s.key === "health" ? d.health_retry : v.m?.retry;
+    const retry = r ? `<div class="retry">Retrying: attempt ${r.attempt}${r.next_attempt ? `, next in <span data-until="${esc(r.next_attempt)}"></span>` : ""}
+      ${r.last_failure ? `<span class="mono">${esc(r.last_failure.slice(0, 140))}</span>` : ""}</div>` : "";
+    return `<div class="step ${v.cls}"><div class="title">${s.title}${link}</div><div class="what">${s.what}</div><div class="state">${esc(v.text)}</div>${retry}</div>`;
+  }).join(""));
+
+  let banner = "";
+  const rollback = d.related.find((r) => r.kind === "rollback");
+  if (d.phase === "rolling-back") banner = `<div class="banner warn">Saga rollback: tearing down what was built (${esc(d.built.join(", ") || "partial state")}). ${rollback ? wfLink(rollback.workflow_id, "Rollback workflow ↗") : ""}</div>`;
+  else if (d.status === "failed") banner = `<div class="banner bad"><b>Deploy failed${d.phase === "rolled-back" ? ", everything rolled back" : ""}.</b> <span class="mono">${esc(d.error || "")}</span> ${rollback ? wfLink(rollback.workflow_id, "Rollback ↗") : ""}</div>`;
+  else if (d.status === "canceled") banner = `<div class="banner warn">Deploy canceled${d.phase === "rolled-back" ? " and rolled back" : ""}.</div>`;
+  else if (d.status === "running" && !d.phase) banner = `<div class="banner warn">No worker has picked this up. Is <code>python worker.py --target ${esc(d.target)}</code> running? The workflow will continue as soon as one is.</div>`;
+  setHTML($("#sec-banner"), banner);
+
+  const waiting = d.modules.filter((m) => m.detail === "awaiting-approval" && m.status === "running");
+  setHTML($("#sec-approval"), waiting.map((m) => {
+    const s = m.plan.summary;
+    return `<div class="card approval" data-module="${esc(m.module)}">
+      <div class="row" style="justify-content:space-between"><h3>Approve the <code>${esc(m.module)}</code> plan?</h3>${wfLink(m.workflow_id)}</div>
+      <div class="counts" style="margin-top:8px"><span><b style="color:var(--ok)">+${s.add}</b> add</span><span><b style="color:var(--warn)">~${s.change}</b> change</span><span><b style="color:var(--bad)">-${s.destroy}</b> destroy</span>
+        ${m.plan.round > 1 ? `<span class="badge waiting">re-plan, round ${m.plan.round}</span>` : ""}<span class="hint mono">fingerprint ${esc(s.fingerprint)}</span></div>
+      <div class="plan">${planLines(s)}</div>
+      <label class="field">Reason (recorded in workflow history)<input name="reason" placeholder="e.g. reviewed with the network team" autocomplete="off"></label>
+      <div class="row"><button class="btn ok" data-decide="1" type="button">Approve and apply</button><button class="btn bad" data-decide="0" type="button">Reject and roll back</button>
+        <span class="hint">Sent as a Temporal Update to <span class="mono">${esc(m.workflow_id)}</span></span></div></div>`;
+  }).join(""));
+
+  const ttl = d.expires_at && d.phase === "ttl-wait";
+  setHTML($("#sec-instance"), `<h2>Instance</h2><dl class="kv">
+      <dt>URL</dt><dd>${d.url && teardownState(d) !== "done" ? urlView(d) : "—"}</dd>
+      <dt>Built</dt><dd>${teardownState(d) === "done" ? "nothing left: torn down" : esc(d.built.join(", ") || "—")}</dd>
+      <dt>Teardown</dt><dd>${ttl ? `in <span class="countdown" data-expires="${esc(d.expires_at)}"></span> <span class="hint">at ${esc(clock(d.expires_at))}</span>` : d.phase === "torn-down" ? "done (TTL)" : "manual"}</dd>
+    </dl>
+    ${ttl ? `<div class="row" style="margin-top:12px"><button class="btn" type="button" data-act="extend">+5 minutes</button><button class="btn bad" type="button" data-act="teardown-now">Tear down now</button></div>
+      <p class="hint" style="margin:8px 0 0">Signals to the running deploy: a durable timer that survives worker restarts.</p>` : ""}`);
+  tick();
+
+  const settled = d.status !== "running";
+  setHTML($("#sec-actions"), `<h2>Actions</h2>
+    <label class="field">Swap app version (replaces the instance, then health-checks it)
+      <span class="row" style="margin-top:4px"><input name="version" value="v2" style="flex:1;margin:0" autocomplete="off"><button class="btn" type="button" data-act="swap">Swap</button></span></label>
+    <div class="row" style="margin-top:4px"><button class="btn bad" type="button" data-act="teardown" ${settled ? "" : "disabled"}>Tear down ${esc(d.env)}</button></div>
+    <p class="hint" style="margin:8px 0 0">${settled ? "Teardown reads state first and skips empty modules, so it's safe to run twice." : "Teardown is available once the deploy finishes. To stop a TTL wait, use Tear down now."}</p>`);
+
+  setHTML($("#sec-timeline"), d.related.length ? `<table class="timeline"><tbody>${d.related.map((r) =>
+    `<tr><td class="when">${esc(clock(r.started))}</td><td><span class="mono">${esc(r.workflow_id)}</span><br><span class="hint">${esc(r.type)}</span></td>
+      <td><span class="badge ${esc(r.status)}">${esc(r.status)}</span></td><td>${wfLink(r.workflow_id, "↗")}</td></tr>`).join("")}</tbody></table>` : `<p class="hint">None yet.</p>`);
+}
+
+function urlView(d) {
+  if (d.target === "sim") return `<span class="mono">${esc(d.url)}</span> <span class="hint">(simulated)</span>`;
+  // Local instances are named until the health check finds Floci's port forward.
+  if (d.url.includes(".floci.localhost")) return `<span class="mono">${esc(d.url)}</span> <span class="hint">(finding Floci's forwarded port…)</span>`;
+  return `<a href="${esc(d.url)}" target="_blank" rel="noopener">${esc(d.url)}</a>`;
+}
+
+function tick() {
+  document.querySelectorAll("[data-until]").forEach((el) => {
+    const s = Math.max(0, Math.round((new Date(el.dataset.until) - Date.now()) / 1000));
+    el.textContent = s + "s";
+  });
+  document.querySelectorAll("[data-expires]").forEach((el) => {
+    const s = Math.max(0, Math.round((new Date(el.dataset.expires) - Date.now()) / 1000));
+    el.textContent = `${Math.floor(s / 60)}:${String(s % 60).padStart(2, "0")}`;
+  });
+}
+
+$("#detail").addEventListener("click", async (e) => {
+  const btn = e.target.closest("button");
+  if (!btn || !state.detail) return;
+  const d = state.detail, base = `/api/${d.target}/envs/${encodeURIComponent(d.env)}`;
+  try {
+    if (btn.dataset.decide !== undefined) {
+      const card = btn.closest("[data-module]");
+      const approved = btn.dataset.decide === "1";
+      btn.disabled = true;
+      const r = await api(`${base}/modules/${card.dataset.module}/decide`, { method: "POST", body: { approved, reason: card.querySelector("[name=reason]").value } });
+      toast(`${card.dataset.module}: ${r.result}`);
+    } else if (btn.dataset.act === "extend") {
+      await api(`${base}/extend`, { method: "POST", body: { seconds: 300 } }); toast("TTL extended by 5 minutes");
+    } else if (btn.dataset.act === "teardown-now") {
+      await api(`${base}/teardown-now`, { method: "POST" }); toast("Teardown requested");
+    } else if (btn.dataset.act === "teardown") {
+      if (!confirm(`Tear down ${d.env} on ${d.target}?`)) return;
+      const r = await api(`${base}/teardown`, { method: "POST" }); toast(`Started ${r.workflow_id}`);
+    } else if (btn.dataset.act === "swap") {
+      const version = $("#sec-actions [name=version]").value.trim();
+      const r = await api(`${base}/swap`, { method: "POST", body: { version } }); toast(`Started ${r.workflow_id}`);
+    } else return;
+    refreshDetail();
+  } catch (err) { toast(err.message, true); btn.disabled = false; }
+});
+
+// ---- boot ----
+function refreshAll() { refreshWorker(); refreshEnvs(); refreshFaults(); refreshDetail(); }
+
+(async function boot() {
+  try { state.config = await api("/api/config"); }
+  catch (e) { setHTML($("#detail"), `<div class="card empty"><b>Can't reach the API</b>${esc(e.message)}</div>`); return; }
+  const saved = load("target");
+  state.target = state.config.targets.includes(saved) ? saved : "sim";
+  renderTargets();
+  await refreshEnvs();
+  const savedEnv = load("env." + state.target);
+  if (savedEnv && state.envs.some((e) => e.env === savedEnv)) state.env = savedEnv;
+  $("#deploy-form").env.value = suggestEnv();
+  renderEnvs(); renderDetail(); refreshAll();
+  setInterval(refreshDetail, 1500);
+  setInterval(refreshEnvs, 4000);
+  setInterval(refreshWorker, 5000);
+  setInterval(refreshFaults, 5000);
+  setInterval(tick, 1000);
+})();
+</script>
+</body>
+</html>

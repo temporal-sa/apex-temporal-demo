@@ -1,9 +1,4 @@
-import os
 import shutil
-
-# activities/terraform.py refuses to import without a state bucket, and the
-# workflows import it. No test talks to S3, so any value works.
-os.environ["TF_STATE_BUCKET"] = "test-bucket"
 
 import pytest_asyncio
 from temporalio.testing import WorkflowEnvironment

@@ -27,10 +27,21 @@ variable "idempotency_key" {
   default = ""
 }
 
+# Demo hook: when true, the app deploy fails during apply (after network and
+# compute exist), so the workflow's saga rollback has something to undo.
+variable "simulate_failure" {
+  type    = bool
+  default = false
+}
+
 resource "null_resource" "app_marker" {
   triggers = {
     env         = var.env_name
     app_version = var.app_version
+  }
+
+  provisioner "local-exec" {
+    command = var.simulate_failure ? "echo 'Simulated app deploy failure' >&2; exit 1" : "true"
   }
 }
 

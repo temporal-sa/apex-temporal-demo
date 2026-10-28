@@ -12,3 +12,8 @@ TASK_QUEUE_NONPROD = os.getenv("TEMPORAL_TASK_QUEUE_NONPROD", "nonprod-provision
 # Terraform modules). TF_STATE_REGION is only where the state bucket lives.
 TF_STATE_BUCKET = os.getenv("TF_STATE_BUCKET", "")
 TF_STATE_REGION = os.getenv("TF_STATE_REGION", "us-east-1")
+
+# The `local` target: Terraform against Floci, a local AWS emulator. Its state
+# bucket lives inside Floci; the local worker creates it on startup.
+FLOCI_ENDPOINT = os.getenv("FLOCI_ENDPOINT", "http://localhost:4566")
+LOCAL_STATE_BUCKET = os.getenv("LOCAL_STATE_BUCKET", "apex-local-state")

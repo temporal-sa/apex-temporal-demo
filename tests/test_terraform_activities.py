@@ -49,6 +49,7 @@ async def plan(env: str, summarize: bool = False) -> tf.PlanResult:
         ("No valid credential sources found", "AwsCredentialsError", True),
         ("api error ExpiredToken: token expired", "AwsCredentialsError", True),
         ("VpcLimitExceeded: The maximum number of VPCs", "AwsQuotaError", True),
+        ("Error: local-exec provisioner error: exit status 1", "AppDeployError", True),
         ("RequestLimitExceeded: Request limit exceeded", "TerraformError", False),
         ("Error: Error acquiring the state lock", "TerraformError", False),
         ("Error: Saved plan is stale", "TerraformError", False),

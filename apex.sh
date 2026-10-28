@@ -66,14 +66,23 @@ confirm_and_run() {
 # Env names starting with "chaos-" trigger the 30s kill -9 window in the
 # workflow, so they only appear under the Chaos variation.
 STANDARD_ENVS=("ephemeral-test-01" "ephemeral-test-02" "ephemeral-test-03")
-FAIL_ENVS=("fail-network-01" "fail-network-02")
+FAIL_ENVS=("fail-app-01" "fail-app-02")
 CHAOS_ENVS=("chaos-test-01" "chaos-test-02")
+
+# Target: $APEX_TARGET if set, otherwise ask. Every command gets --target, and
+# the worker for that target must be running (python worker.py --target ...).
+target="${APEX_TARGET:-}"
+if [[ -z "$target" ]]; then
+  target="$(prompt_choice "Target:" "aws" "local" "sim")"
+fi
+echo "Target: $target" >&2
+T=(--target "$target")
 
 action="$(prompt_choice "What do you want to run?" "Provision" "Approve/Reject a plan" "Swap app version" "Teardown")"
 
 case "$action" in
   Provision)
-    variation="$(prompt_choice "Variation:" "Standard" "Fail after network" "Chaos (kill -9 window)" "Require approval")"
+    variation="$(prompt_choice "Variation:" "Standard" "Fail app deploy" "Chaos (kill -9 window)" "Require approval")"
     case "$variation" in
       "Require approval")
         env="$(pick_env_name "${STANDARD_ENVS[@]}")"
@@ -83,38 +92,38 @@ case "$action" in
         env="$(pick_env_name "${CHAOS_ENVS[@]}")"
         args=("$env")
         ;;
-      "Fail after network")
+      "Fail app deploy")
         env="$(pick_env_name "${FAIL_ENVS[@]}")"
-        args=("$env" "--fail-after-network")
+        args=("$env" "--fail-app-deploy")
         ;;
       *)
         env="$(pick_env_name "${STANDARD_ENVS[@]}")"
         args=("$env")
         ;;
     esac
-    confirm_and_run "python starter.py ${args[*]}" python starter.py "${args[@]}"
+    confirm_and_run "python starter.py ${args[*]} ${T[*]}" python starter.py "${args[@]}" "${T[@]}"
     ;;
   "Approve/Reject a plan")
     env="$(pick_env_name "${STANDARD_ENVS[@]}")"
     module="$(prompt_choice "Module:" "network" "compute" "app")"
     # Show the plan first; this fails if the module isn't running.
-    python approve.py "$env" "$module" || exit 1
+    python approve.py "$env" "$module" "${T[@]}" || exit 1
     echo
     decision="$(prompt_choice "Decision:" "Approve" "Reject")"
     read -r -p "Reason: " reason
     flag="--approve"
     [[ "$decision" == "Reject" ]] && flag="--reject"
-    confirm_and_run "python approve.py $env $module $flag --reason \"$reason\"" \
-      python approve.py "$env" "$module" "$flag" --reason "$reason"
+    confirm_and_run "python approve.py $env $module $flag --reason \"$reason\" ${T[*]}" \
+      python approve.py "$env" "$module" "$flag" --reason "$reason" "${T[@]}"
     ;;
   "Swap app version")
     env="$(pick_env_name "${STANDARD_ENVS[@]}" "${CHAOS_ENVS[@]}")"
     read -r -p "New app version [v2]: " version
     version="${version:-v2}"
-    confirm_and_run "python swapper.py $env $version" python swapper.py "$env" "$version"
+    confirm_and_run "python swapper.py $env $version ${T[*]}" python swapper.py "$env" "$version" "${T[@]}"
     ;;
   Teardown)
     env="$(pick_env_name "${STANDARD_ENVS[@]}" "${FAIL_ENVS[@]}" "${CHAOS_ENVS[@]}")"
-    confirm_and_run "python teardown.py $env" python teardown.py "$env"
+    confirm_and_run "python teardown.py $env ${T[*]}" python teardown.py "$env" "${T[@]}"
     ;;
 esac

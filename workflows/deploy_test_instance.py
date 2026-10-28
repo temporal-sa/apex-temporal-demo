@@ -7,6 +7,7 @@ from temporalio.exceptions import ApplicationError, is_cancelled_exception
 with workflow.unsafe.imports_passed_through():
     from activities.health import http_health_check
     from activities.terraform import simulate_long_step
+    from shared.targets import target_for_queue, workflow_id
 
 from workflows.provision_module import DEFAULT_APPROVAL_TIMEOUT_SECONDS, ProvisionModule
 from workflows.teardown_instance import TeardownInstance
@@ -79,12 +80,13 @@ class DeployTestInstance:
         env_name: str,
         ttl_seconds: int = 0,
         rollback_on_failure: bool = True,
-        fail_after_network: bool = False,
+        fail_app_deploy: bool = False,
         require_approval: bool = False,
         approval_timeout_seconds: int = DEFAULT_APPROVAL_TIMEOUT_SECONDS,
     ) -> dict:
         workflow.logger.info(f"DeployTestInstance: {env_name}")
         self._env = env_name
+        target = target_for_queue(workflow.info().task_queue)
         # Appended to each child's args only when set, so a deploy without
         # approval starts its children exactly as before.
         approval_args = [True, approval_timeout_seconds] if require_approval else []
@@ -95,11 +97,9 @@ class DeployTestInstance:
             net_outputs = await workflow.execute_child_workflow(
                 ProvisionModule.run,
                 args=["network", env_name, {"env_name": env_name}, *approval_args],
-                id=f"provision-network-{env_name}",
+                id=workflow_id(target, "provision", "network", env_name),
             )
             self._modules.append("network")
-            if fail_after_network:
-                raise RuntimeError("intentional demo failure after network")
 
             # Chaos hook: pause between network and compute so a `kill -9` window exists.
             if env_name.startswith("chaos-"):
@@ -120,16 +120,21 @@ class DeployTestInstance:
             compute_outputs = await workflow.execute_child_workflow(
                 ProvisionModule.run,
                 args=["compute", env_name, compute_inputs, *approval_args],
-                id=f"provision-compute-{env_name}",
+                id=workflow_id(target, "provision", "compute", env_name),
             )
             self._modules.append("compute")
 
-            # 3) App marker module (placeholder for future app deploy logic)
+            # 3) App marker module (placeholder for future app deploy logic).
+            # With fail_app_deploy, the app module's apply fails on purpose
+            # after network and compute are built, to demo the saga rollback.
             self._phase = "provisioning-app"
+            app_inputs = {"env_name": env_name, "app_version": "v1"}
+            if fail_app_deploy:
+                app_inputs["simulate_failure"] = "true"
             await workflow.execute_child_workflow(
                 ProvisionModule.run,
-                args=["app", env_name, {"env_name": env_name, "app_version": "v1"}, *approval_args],
-                id=f"provision-app-{env_name}",
+                args=["app", env_name, app_inputs, *approval_args],
+                id=workflow_id(target, "provision", "app", env_name),
             )
             self._modules.append("app")
 
@@ -142,13 +147,16 @@ class DeployTestInstance:
             url = f"http://{public_ip}/"
             self._phase = "health-check"
             self._url = url
-            await workflow.execute_activity(
+            health = await workflow.execute_activity(
                 http_health_check,
                 args=[url],
                 start_to_close_timeout=timedelta(seconds=15),
                 schedule_to_close_timeout=timedelta(minutes=5),
                 retry_policy=HEALTH_RETRY,
             )
+            # The URL that answered: the same one on AWS, but on the local
+            # target the instance name resolves to a forwarded localhost port.
+            url = self._url = health.url
             self._phase = "healthy"
 
             result = {
@@ -164,7 +172,7 @@ class DeployTestInstance:
                 await workflow.execute_child_workflow(
                     TeardownInstance.run,
                     env_name,
-                    id=f"teardown-ttl-{env_name}",
+                    id=workflow_id(target, "teardown-ttl", env_name),
                 )
                 self._phase = "torn-down"
                 result["torn_down_at"] = workflow.now().isoformat()
@@ -181,7 +189,7 @@ class DeployTestInstance:
                     f"deploy {reason}; rolling back "
                     f"(completed modules: {self._modules or 'none'})"
                 )
-                await self._rollback(env_name)
+                await self._rollback(target, env_name)
             # Re-raise a cancellation as-is so the run ends as Canceled, not Failed.
             if cancelled:
                 raise
@@ -215,13 +223,13 @@ class DeployTestInstance:
             "teardown requested" if self._teardown_requested else "TTL expired, triggering teardown"
         )
 
-    async def _rollback(self, env_name: str) -> None:
+    async def _rollback(self, target: str, env_name: str) -> None:
         self._phase = "rolling-back"
         try:
             await workflow.execute_child_workflow(
                 TeardownInstance.run,
                 env_name,
-                id=f"rollback-{env_name}-{int(workflow.now().timestamp())}",
+                id=workflow_id(target, "rollback", env_name, str(int(workflow.now().timestamp()))),
             )
             self._phase = "rolled-back"
         except Exception as rollback_err:

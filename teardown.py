@@ -1,25 +1,27 @@
+import argparse
 import asyncio
 import sys
 from temporalio.client import Client
 from temporalio.exceptions import WorkflowAlreadyStartedError
 
-from shared.config import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE, TASK_QUEUE_NONPROD
+from shared.config import TEMPORAL_ADDRESS, TEMPORAL_NAMESPACE
+from shared.targets import DEFAULT_TARGET, add_target_arg, task_queue, workflow_id
 from workflows.teardown_instance import TeardownInstance
 
 
-async def main(env_name: str):
+async def main(env_name: str, target: str = DEFAULT_TARGET):
     client = await Client.connect(TEMPORAL_ADDRESS, namespace=TEMPORAL_NAMESPACE)
-    workflow_id = f"teardown-{env_name}"
+    wf_id = workflow_id(target, "teardown", env_name)
     try:
         handle = await client.start_workflow(
             TeardownInstance.run,
             env_name,
-            id=workflow_id,
-            task_queue=TASK_QUEUE_NONPROD,
+            id=wf_id,
+            task_queue=task_queue(target),
         )
     except WorkflowAlreadyStartedError:
         print(
-            f"Teardown '{workflow_id}' is already running. Wait for it to finish before re-running.",
+            f"Teardown '{wf_id}' is already running. Wait for it to finish before re-running.",
             file=sys.stderr,
         )
         sys.exit(1)
@@ -29,5 +31,8 @@ async def main(env_name: str):
 
 
 if __name__ == "__main__":
-    env = sys.argv[1] if len(sys.argv) > 1 else "ephemeral-test-01"
-    asyncio.run(main(env))
+    parser = argparse.ArgumentParser(description="Tear down an environment.")
+    parser.add_argument("env", nargs="?", default="ephemeral-test-01", help="environment name")
+    add_target_arg(parser)
+    args = parser.parse_args()
+    asyncio.run(main(args.env, args.target))
